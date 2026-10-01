@@ -10,6 +10,7 @@ python/envelope.npy
 .venv-kibot
 build2350
 build2040
+meta/*
 
 
 
