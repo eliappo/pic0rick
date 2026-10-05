@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build every firmware variant into firmware/dist/:
 #   rp2040 {mux, nomux}                 (stdio, non-DSP)
 #   rp2350 {mux, nomux}                 (stdio, non-DSP)
