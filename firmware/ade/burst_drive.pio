@@ -45,7 +45,7 @@ static inline void burst_drive_init(PIO pio, uint sm, uint offset,
     pio_gpio_init(pio, pin_base + 1);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 2, true);
 
-    pio_sm_config c = burst_drive_get_default_config(offset);
+    pio_sm_config c = burst_drive_program_get_default_config(offset);
     sm_config_set_set_pins(&c, pin_base, 2);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
     sm_config_set_clkdiv(&c, clkdiv);

@@ -16,7 +16,7 @@
 #ifdef MUX
 #include "max/max14866.h"
 #endif
-#ifdef MUX
+#ifdef ADE
 #include "ade/ade.h"
 #endif
 
@@ -157,14 +157,16 @@ command_t command_list[] = {
     {"clear mux", max14866_clear},
 #endif
 #ifdef ADE
-    //{"set camtrig", camtrig_set },
-    //{"set camexp", camexp_set },
-    //{"set strobtrig", strobtrig_set },
-    //{"set strobwidth", strobwidth_set },
-    //{"enable logging", logging_enable },
-    //{"enable camera", camera_enable },
-    //{"enable strobe ", strobe_enable },
-    //{"fire", ade_fire },
+    {"set camtrig",     camtrig_set},
+    {"set camexp",      camexp_set},
+    {"set strobtrig",   strobtrig_set},
+    {"set strobwidth",  strobwidth_set},
+    {"enable logging",  logging_enable},
+    {"enable camera",   camera_enable},
+    {"enable strobe",   strobe_enable},
+    {"arm eject",       ade_arm_ejection},
+    {"arm calibration", ade_arm_calibration},
+    {"fire",            ade_fire},
 #endif
 };
 

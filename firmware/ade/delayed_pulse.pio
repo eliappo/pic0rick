@@ -19,9 +19,9 @@ width_loop:
 static inline void delayed_pulse_init(PIO pio, uint sm, uint offset,
                                               uint out_pin, float clkdiv) {
     pio_gpio_init(pio, out_pin);
-    pio_sm_set_consistent_pindirs(pio, sm, out_pin, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, out_pin, 1, true);
 
-    pio_sm_config c = delayed_pulse_get_default_config(offset);
+    pio_sm_config c = delayed_pulse_program_get_default_config(offset);
     sm_config_set_set_pins(&c, out_pin, 1);
     sm_config_set_clkdiv(&c, clkdiv);
     pio_sm_init(pio, sm, offset, &c);
