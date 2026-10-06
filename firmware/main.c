@@ -16,6 +16,9 @@
 #ifdef MUX
 #include "max/max14866.h"
 #endif
+#ifdef MUX
+#include "ade/ade.h"
+#endif
 
 //---------------------------------------------------------------------------
 // GLOBALS
@@ -45,6 +48,11 @@ void version_cmd(const char *args)
     printf("mux:     enabled (MAX14866)\n");
 #else
     printf("mux:     disabled\n");
+#endif
+#ifdef ADE
+    printf("ade:     enabled (acoustic droplet ejection)\n");
+#else
+    printf("ade:     disabled\n");
 #endif
     printf("build:   %s\n", FW_GIT_HASH);
     printf("release: %s\n", FW_RELEASE_URL);
@@ -148,6 +156,16 @@ command_t command_list[] = {
     {"set mux", max14866_set},
     {"clear mux", max14866_clear},
 #endif
+#ifdef ADE
+    //{"set camtrig", camtrig_set },
+    //{"set camexp", camexp_set },
+    //{"set strobtrig", strobtrig_set },
+    //{"set strobwidth", strobwidth_set },
+    //{"enable logging", logging_enable },
+    //{"enable camera", camera_enable },
+    //{"enable strobe ", strobe_enable },
+    //{"fire", ade_fire },
+#endif
 };
 
 void process_command(char *input)
@@ -239,6 +257,10 @@ int main()
     sleep_ms(100);
 #ifdef MUX
     max14866_init();
+    sleep_ms(100);
+#endif
+#ifdef ADE
+    ade_init();
     sleep_ms(100);
 #endif
     char input[128];
