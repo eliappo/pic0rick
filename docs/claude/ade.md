@@ -153,14 +153,14 @@ read
 - [x] Plan approved
 - [x] `docs/claude/ade.md` created (this file)
 - [x] `firmware/CMakePresets.json` created
-- [ ] `firmware/CMakeLists.txt` — add ADE block
-- [ ] `firmware/hw/acquisition.h/.c` — add release/reclaim functions
-- [ ] `firmware/ade/burst_drive.pio` — create
-- [ ] `firmware/ade/burst_gate.pio` — create
-- [ ] `firmware/ade/ade.c` — fix bugs, implement all functions
-- [ ] `firmware/ade/ade.h` — add mode enum, `ade_arm_ejection`, `ade_arm_calibration`
-- [ ] `firmware/main.c` — uncomment + wire ADE command table
-- [ ] Build passes (`cmake --preset ade && cmake --build build-ade`)
+- [x] `firmware/CMakeLists.txt` — ADE block added
+- [x] `firmware/hw/acquisition.h/.c` — release/reclaim functions added
+- [x] `firmware/ade/burst_drive.pio` — created (14 instructions)
+- [x] `firmware/ade/burst_gate.pio` — created (8 instructions)
+- [x] `firmware/ade/ade.c` — fully implemented
+- [x] `firmware/ade/ade.h` — rewritten with mode enum, all declarations
+- [x] `firmware/main.c` — all 10 ADE REPL commands wired
+- [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
 - [ ] Hardware smoke test
 
 ---
