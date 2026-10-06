@@ -3,7 +3,7 @@
     mov isr, osr
     pull block          ; width - 3
 .wrap_target
-    wait 1 irq 0 rel    ; SM0 -> IRQ 0, SM1 -> IRQ 1
+    wait 1 irq 2        ; absolute IRQ 2, fired by burst_drive for all delayed-pulse SMs
     mov x, isr
 delay_loop:
     jmp x-- delay_loop

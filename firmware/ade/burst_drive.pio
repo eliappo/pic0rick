@@ -1,0 +1,56 @@
+.program burst_drive
+; Bipolar burst generator for ADE transducer excitation.
+; Inspired by pulser.pio drive SM but loops N cycles at a set frequency.
+;
+; SET base = ADE_OUTPUT_P_POS (GPIO11), 2 pins: P+ / P-
+;   set 1 = P+=1, P-=0  (positive half-cycle)
+;   set 2 = P+=0, P-=1  (negative half-cycle)
+;   set 0 = idle
+;
+; Pre-load FIFO before enabling SM (pio_sm_put, non-blocking since SM is stopped):
+;   Word 0: burst_count - 1
+;   Word 1: half_period_ticks - 3  (overhead: set + mov_y + jmp-exit = 3 cycles)
+;
+; Fires IRQ 2 (absolute) once at burst start to trigger all delayed_pulse SMs
+; (camera + strobe both wait on irq 2).
+; Fires IRQ 4 (absolute) on burst completion to signal burst_gate.
+;
+; pio1 instruction-memory footprint: 14 instructions.
+
+.wrap_target
+    pull block              ; burst_count - 1  (stalls here when idle)
+    mov isr, osr            ; save count in ISR
+    pull block              ; half_period_ticks - 3 (stays in OSR for inner loops)
+    irq set 2               ; trigger camera + strobe delayed_pulse SMs
+    mov x, isr              ; reload burst counter
+cycle_loop:
+    set pins, 1             ; P+ = 1, P- = 0  (positive half)
+    mov y, osr
+pos_loop:
+    jmp y-- pos_loop
+    set pins, 2             ; P+ = 0, P- = 1  (negative half)
+    mov y, osr
+neg_loop:
+    jmp y-- neg_loop
+    jmp x-- cycle_loop
+    set pins, 0             ; idle
+    irq set 4               ; signal burst_gate: burst complete
+.wrap
+
+% c-sdk {
+
+static inline void burst_drive_init(PIO pio, uint sm, uint offset,
+                                    uint pin_base, float clkdiv) {
+    pio_gpio_init(pio, pin_base);
+    pio_gpio_init(pio, pin_base + 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 2, true);
+
+    pio_sm_config c = burst_drive_get_default_config(offset);
+    sm_config_set_set_pins(&c, pin_base, 2);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, clkdiv);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_pins_with_mask(pio, sm, 0u, 3u << pin_base);
+}
+
+%}

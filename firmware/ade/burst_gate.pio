@@ -1,0 +1,49 @@
+.program burst_gate
+; Burst gate controller for ADE. Mirrors pulser.pio gate SM logic.
+; Enables amplifier output (OE) for the full burst duration, then
+; activates passive damping (PDAMP) after burst completion.
+;
+; SET base = U4RK_PULSER_GATE_PIN_BASE (GPIO16), 2 pins: PDAMP / OE
+;   bit0 = GPIO16 = PDAMP,  bit1 = GPIO17 = OE
+;   set 0 = idle (OE=0, PDAMP=0)
+;   set 2 = OE only (OE=1, PDAMP=0)
+;   set 3 = OE + PDAMP (OE=1, PDAMP=1)
+;
+; Pre-load FIFO before enabling SM:
+;   Word 0: damp_ticks - 3  (overhead: set + jmp-exit = 3 cycles)
+;
+; OE is raised immediately on SM start (2 cycles before burst_drive fires P+).
+; Waits on IRQ 4 (fired by burst_drive after last burst cycle), then damps.
+; Fires IRQ 5 on completion to signal firmware that the full ejection is done.
+;
+; pio1 instruction-memory footprint: 8 instructions.
+
+.wrap_target
+    pull block              ; damp_ticks - 3  (stalls here when idle)
+    set pins, 2             ; OE=1, PDAMP=0  (enable amp)
+    wait 1 irq 4            ; wait for burst_drive to finish (clears IRQ 4)
+    set pins, 3             ; OE=1, PDAMP=1  (active damping)
+    mov x, osr
+damp_loop:
+    jmp x-- damp_loop
+    set pins, 0             ; idle
+    irq set 5               ; signal firmware: ejection complete
+.wrap
+
+% c-sdk {
+
+static inline void burst_gate_init(PIO pio, uint sm, uint offset,
+                                   uint pin_base, float clkdiv) {
+    pio_gpio_init(pio, pin_base);
+    pio_gpio_init(pio, pin_base + 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 2, true);
+
+    pio_sm_config c = burst_gate_get_default_config(offset);
+    sm_config_set_set_pins(&c, pin_base, 2);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, clkdiv);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_pins_with_mask(pio, sm, 0u, 3u << pin_base);
+}
+
+%}
