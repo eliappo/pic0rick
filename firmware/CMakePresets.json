@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "ade",
+      "displayName": "ADE (RP2040, no MUX)",
+      "binaryDir": "${sourceDir}/build-ade",
+      "cacheVariables": {
+        "PICO_BOARD": "pico",
+        "ADE": "ON",
+        "MUX": "OFF"
+      }
+    }
+  ]
+}

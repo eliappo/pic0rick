@@ -19,6 +19,9 @@ future instance would waste time rediscovering.
   `fab-fast` path, and the venv/3D-model gotchas.
 - `hardware-testing.md` — flashing a connected board (UF2 → BOOTSEL mass storage)
   and talking to the REPL over `/dev/ttyACM0`; the `reboot-dfu` iterate loop.
+- `ade.md` — ADE (Acoustic Droplet Ejection) module: pin/SM assignment, mode-switch
+  mechanism, implementation status, known bugs in scaffolding. **Read this first
+  when working on `firmware/ade/` or branch `acoustic-droplet-ejection-hack`.**
 
 ## `docs/fw_history/` — maintainer-only firmware baselines
 

@@ -65,6 +65,19 @@ discoveries logged since.
 - [ ] **[maintainer]** Document tested transducer frequencies/types and whether
   immersion probes are supported (any hardware changes needed). (was Q14)
 
+## ADE Module (branch: acoustic-droplet-ejection-hack)
+
+- [ ] **[claude]** `firmware/CMakeLists.txt` — add ADE option block (mirrors MUX pattern)
+- [ ] **[claude]** `firmware/hw/acquisition.h/.c` — add `u4rk_acquisition_release_pulser()` and `u4rk_acquisition_reclaim_pulser()`
+- [ ] **[claude]** `firmware/ade/burst_drive.pio` — create bipolar burst PIO program
+- [ ] **[claude]** `firmware/ade/burst_gate.pio` — create burst gate PIO program
+- [ ] **[claude]** `firmware/ade/ade.c` — fix bugs (clock div, SM claims), implement all stub functions
+- [ ] **[claude]** `firmware/ade/ade.h` — add mode enum + `ade_arm_ejection` / `ade_arm_calibration` declarations
+- [ ] **[claude]** `firmware/main.c` — uncomment + wire ADE command table entries
+- [ ] **[claude]** Remove `firmware/burst.pio` (content migrated to `burst_drive.pio`)
+- [ ] **[maintainer]** Confirm burst frequency range and transducer resonant frequency for ADE
+- [ ] **[maintainer]** Confirm GPIO18/19/20/21 pin routing on ADE plug-in board (camera/strobe/motor)
+
 ## Discoveries (logged by Claude)
 
 - [x] **[claude]** DSP **test guide** (`docs/dsp_test_guide.md`) and `python/`
