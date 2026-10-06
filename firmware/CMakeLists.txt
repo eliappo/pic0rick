@@ -111,6 +111,11 @@ option(MUX "Build with MAX14866 HV mux module board support" ON)
 # float32 Hilbert-envelope / A-law pipeline. Firmware sources are wired in a
 # later phase; P1 only sets up the option, the RP2350 guard and the CMSIS-DSP
 # static library (cmsisdsp_p0rk).
+option(ADE "Build with ADE plug-in module board support" OFF)
+if(ADE AND DSP)
+    message(FATAL_ERROR "ADE=ON is not supported with DSP=ON (REPL build only)")
+endif()
+
 option(DSP "Build with the onboard-DSP feature set (RP2350/pico2 only)" OFF)
 if(DSP AND NOT PICO_BOARD STREQUAL "pico2")
     message(FATAL_ERROR
@@ -280,6 +285,17 @@ else()
         message(STATUS "MUX (MAX14866) support: ENABLED")
     else()
         message(STATUS "MUX (MAX14866) support: DISABLED")
+    endif()
+    if(ADE)
+        pico_generate_pio_header(adc-pulse ${CMAKE_CURRENT_LIST_DIR}/ade/delayed_pulse.pio)
+        pico_generate_pio_header(adc-pulse ${CMAKE_CURRENT_LIST_DIR}/ade/burst_drive.pio)
+        pico_generate_pio_header(adc-pulse ${CMAKE_CURRENT_LIST_DIR}/ade/burst_gate.pio)
+        target_sources(adc-pulse PRIVATE ${CMAKE_CURRENT_LIST_DIR}/ade/ade.c)
+        target_include_directories(adc-pulse PRIVATE ${CMAKE_CURRENT_LIST_DIR}/ade)
+        target_compile_definitions(adc-pulse PRIVATE ADE=1)
+        message(STATUS "ADE (Acoustic Droplet Ejection) support: ENABLED")
+    else()
+        message(STATUS "ADE (Acoustic Droplet Ejection) support: disabled")
     endif()
     target_link_libraries(adc-pulse PRIVATE
         pico_stdlib

@@ -136,6 +136,33 @@ bool u4rk_pulser_is_armed(void) {
     return pulser_armed;
 }
 
+void u4rk_acquisition_release_pulser(void) {
+    pulser_armed = false;
+    pio_sm_set_enabled(pulser_pio, pulser_drive_sm, false);
+    pio_sm_set_enabled(pulser_pio, pulser_gate_sm, false);
+    pio_sm_set_pins_with_mask(pulser_pio, pulser_drive_sm, 0u,
+                              3u << U4RK_PULSER_DRIVE_PIN_BASE);
+    pio_sm_set_pins_with_mask(pulser_pio, pulser_gate_sm, 0u,
+                              3u << U4RK_PULSER_GATE_PIN_BASE);
+    pio_sm_unclaim(pulser_pio, pulser_drive_sm);
+    pio_sm_unclaim(pulser_pio, pulser_gate_sm);
+    pio_remove_program(pulser_pio, &u4rk_pulser_program, pulser_offset);
+}
+
+void u4rk_acquisition_reclaim_pulser(void) {
+    pulser_drive_sm = pio_claim_unused_sm(pulser_pio, true);
+    pulser_gate_sm  = pio_claim_unused_sm(pulser_pio, true);
+    pulser_offset   = pio_add_program(pulser_pio, &u4rk_pulser_program);
+    u4rk_pulser_program_init(pulser_pio, pulser_drive_sm, pulser_offset,
+                             U4RK_PULSE_PIO_INSTRUCTION_HZ,
+                             U4RK_PULSER_DRIVE_PIN_BASE);
+    u4rk_pulser_program_init(pulser_pio, pulser_gate_sm, pulser_offset,
+                             U4RK_PULSE_PIO_INSTRUCTION_HZ,
+                             U4RK_PULSER_GATE_PIN_BASE);
+    pulser_armed = false;
+    force_pulser_idle();
+}
+
 static void queue_state(uint sm, uint32_t state, uint32_t ticks) {
     pio_sm_put(pulser_pio, sm, state);
     pio_sm_put(pulser_pio, sm, ticks - U4RK_PULSE_OVERHEAD_TICKS);

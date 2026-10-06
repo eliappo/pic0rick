@@ -11,6 +11,8 @@ typedef enum {
 } u4rk_capture_state_t;
 
 void u4rk_acquisition_init(void);
+void u4rk_acquisition_release_pulser(void);
+void u4rk_acquisition_reclaim_pulser(void);
 bool u4rk_capture_start(uint16_t *destination, uint32_t sample_count);
 u4rk_capture_state_t u4rk_capture_poll(void);
 void u4rk_capture_abort(void);
