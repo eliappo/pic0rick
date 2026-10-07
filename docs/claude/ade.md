@@ -146,7 +146,8 @@ read
 - [x] `firmware/ade/ade.h` — rewritten with mode enum, all declarations
 - [x] `firmware/main.c` — all 12 ADE REPL commands wired (`set burstcount`, `set burstfreq` added in d7a533e)
 - [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
-- [x] Hardware smoke test (RP2040, 2026-10-07): arm eject → fire×2 → arm calibration → start acq all pass
+- [x] Hardware smoke test (RP2040, 2026-10-07): burst, camera (50µs), strobe (5µs) all verified on scope
+- [x] Camera/strobe trigger fixes (76207da)
 
 ---
 
@@ -158,10 +159,18 @@ read
   8 contiguous but only 3+5 remain. Fix: `arm_ejection` removes delayed_pulse, reloads
   it at 0 first, then loads burst_drive (10-23) + burst_gate (24-31) → 32 exact.
   `arm_calibration` reverses: removes all three, reclaims pulser, reloads delayed_pulse.
-- `pio_enable_sm_mask_in_sync()` must be used to start burst_drive + burst_gate
-  simultaneously (same as pulser). Use `(1u << sm0) | (1u << sm1)`.
-- Tick conversion for delays: `ticks = (us * ADE_CLK) / 1000000` then subtract
-  `delayed_pulse` overhead (3 ticks per the C-SDK comment in delayed_pulse.pio).
+- **`pio_sm_set_pins_with_mask()` clobbers SM config (fixed, 76207da):** internally calls
+  `pio_sm_set_config()` with a default config, resetting CLKDIV to 1.0. Must be called
+  BEFORE `pio_sm_init()` — init then restores the correct config. Affected delayed_pulse
+  (clkdiv=62.5); burst programs unaffected (their clkdiv IS 1.0).
+- **Camera/strobe must complete pulses after burst_gate IRQ 5 (fixed, 76207da):**
+  success path of `ade_fire()` only disables burst_drive + burst_gate. Camera/strobe
+  SMs run to completion, wrap to `wait 1 irq 2`, and idle there. `delayed_pulse_load()`
+  on the next `fire()` disables + resets them. Consequence: strobe trigger delay can
+  safely exceed burst+damp duration (~30µs at default settings).
+- `pio_enable_sm_mask_in_sync()` must be used to start all SMs simultaneously.
+- Tick conversion: `ticks = us * ADE_CLK / 1000000`; subtract 3 for `delayed_pulse`
+  loop overhead (minimum 4 ticks enforced in `us_to_delayed_ticks()`).
 - Motor control (GPIO20/21) — intentionally skipped, commented out.
 - MUX (MAX14866) shares GPIO18–21 with ADE — cannot enable both simultaneously.
   `-DADE=ON` implies `-DMUX=OFF` in the build preset.
