@@ -98,9 +98,29 @@ void ade_arm_ejection(const char *args) {
 
     u4rk_acquisition_release_pulser();
 
-    float burst_div = (float)clock_get_hz(clk_sys) / (float)ADE_BURST_CLK;
-    offset_burst_drive = pio_add_program(pio_ade, &burst_drive_program);
-    offset_burst_gate  = pio_add_program(pio_ade, &burst_gate_program);
+    /* After releasing the pulser (17 instr at 0-16) the freed slots are 0-16
+     * and delayed_pulse (10 instr) sits at 17-26.  That leaves only two
+     * non-contiguous free regions (0-16 and 27-31) which cannot fit
+     * burst_gate (8 instr) after burst_drive (14 instr) takes 0-13.
+     * Fix: remove delayed_pulse and reload everything from scratch so that
+     * delayed_pulse(10)+burst_drive(14)+burst_gate(8) = 32 fills pio1 cleanly. */
+    pio_sm_set_enabled(pio_ade, sm_camera, false);
+    pio_sm_set_enabled(pio_ade, sm_strobe,  false);
+    pio_remove_program(pio_ade, &delayed_pulse_program, offset_delayed_pulse);
+
+    float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
+    float burst_div   = (float)clock_get_hz(clk_sys) / (float)ADE_BURST_CLK;
+
+    /* Load in order: delayed_pulse → 0-9, burst_drive → 10-23, burst_gate → 24-31. */
+    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
+    offset_burst_drive   = pio_add_program(pio_ade, &burst_drive_program);
+    offset_burst_gate    = pio_add_program(pio_ade, &burst_gate_program);
+
+    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
+                       ADE_CAMERA_TRIGGER, delayed_div);
+    delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
+                       ADE_STROBE_TRIGGER, delayed_div);
+
     sm_burst_drive = pio_claim_unused_sm(pio_ade, true);
     sm_burst_gate  = pio_claim_unused_sm(pio_ade, true);
     burst_drive_init(pio_ade, sm_burst_drive, offset_burst_drive,
@@ -109,7 +129,8 @@ void ade_arm_ejection(const char *args) {
                     U4RK_PULSER_GATE_PIN_BASE, burst_div);
 
     current_mode = ADE_MODE_EJECTION;
-    printf("ade: ejection mode armed\n");
+    printf("ade: ejection mode armed (drive@%u gate@%u dp@%u)\n",
+           offset_burst_drive, offset_burst_gate, offset_delayed_pulse);
 }
 
 void ade_arm_calibration(const char *args) {
@@ -119,13 +140,26 @@ void ade_arm_calibration(const char *args) {
     }
 
     pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
-    pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
+    pio_sm_set_enabled(pio_ade, sm_burst_gate,  false);
+    pio_sm_set_enabled(pio_ade, sm_camera,       false);
+    pio_sm_set_enabled(pio_ade, sm_strobe,        false);
     pio_sm_unclaim(pio_ade, sm_burst_drive);
     pio_sm_unclaim(pio_ade, sm_burst_gate);
-    pio_remove_program(pio_ade, &burst_drive_program, offset_burst_drive);
-    pio_remove_program(pio_ade, &burst_gate_program, offset_burst_gate);
 
+    /* Remove all ejection-mode programs to free the full 32-slot space. */
+    pio_remove_program(pio_ade, &burst_gate_program,    offset_burst_gate);
+    pio_remove_program(pio_ade, &burst_drive_program,   offset_burst_drive);
+    pio_remove_program(pio_ade, &delayed_pulse_program, offset_delayed_pulse);
+
+    /* Reclaim pulser → loads at 0-16; then delayed_pulse lands at 17-26. */
     u4rk_acquisition_reclaim_pulser();
+
+    float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
+    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
+    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
+                       ADE_CAMERA_TRIGGER, delayed_div);
+    delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
+                       ADE_STROBE_TRIGGER, delayed_div);
 
     current_mode = ADE_MODE_CALIBRATION;
     printf("ade: calibration mode armed\n");
@@ -182,7 +216,13 @@ void ade_fire(const char *args) {
     uint64_t deadline = time_us_64() + ADE_FIRE_TIMEOUT_US;
     while (!pio_interrupt_get(pio_ade, 5)) {
         if (time_us_64() > deadline) {
-            printf("ade: fire timeout\n");
+            printf("ade: fire timeout — pio_irq=0x%02x "
+                   "drive_pc=%u(base=%u) gate_pc=%u(base=%u)\n",
+                   (unsigned)(pio_ade->irq & 0xFF),
+                   (unsigned)(pio_ade->sm[sm_burst_drive].addr),
+                   (unsigned)offset_burst_drive,
+                   (unsigned)(pio_ade->sm[sm_burst_gate].addr),
+                   (unsigned)offset_burst_gate);
             pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
             pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
             if (config.camera_enabled)
@@ -194,7 +234,11 @@ void ade_fire(const char *args) {
     }
     pio_interrupt_clear(pio_ade, 5);
     pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
-    pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
+    pio_sm_set_enabled(pio_ade, sm_burst_gate,  false);
+    if (config.camera_enabled)
+        pio_sm_set_enabled(pio_ade, sm_camera, false);
+    if (config.strobe_enabled)
+        pio_sm_set_enabled(pio_ade, sm_strobe, false);
 
     if (config.log_enabled) {
         printf("ade: fire done — %u cycles @ %u Hz | "
