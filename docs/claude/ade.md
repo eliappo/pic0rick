@@ -60,73 +60,58 @@ These are the ONLY modifications to files outside `firmware/ade/`.
 
 | File | Status | Notes |
 |------|--------|-------|
-| `firmware/ade/ade.h` | exists, complete | constants, struct, declarations |
-| `firmware/ade/ade.c` | exists, incomplete | `ade_init()` partial; all others stubbed |
-| `firmware/ade/delayed_pulse.pio` | exists, complete | camera + strobe pulse gen |
-| `firmware/ade/burst_drive.pio` | TODO | bipolar burst, inspired by pulser.pio drive SM |
-| `firmware/ade/burst_gate.pio` | TODO | OE+PDAMP control for burst duration |
-| `firmware/burst.pio` | exists (wrong location) | scaffolding; superseded by burst_drive.pio |
-| `firmware/CMakeLists.txt` | needs ADE block | mirrors MUX pattern |
-| `firmware/CMakePresets.json` | exists | `ade` preset: pico, ADE=ON, MUX=OFF |
-| `firmware/hw/acquisition.h/.c` | needs 2 new fns | release/reclaim pulser |
-| `firmware/main.c` | needs ADE cmds wired | 8 commands currently commented out |
+| `firmware/ade/ade.h` | complete | constants, `ade_config_t`, `ade_mode_t`, all declarations |
+| `firmware/ade/ade.c` | complete | all functions implemented and hardware-verified |
+| `firmware/ade/delayed_pulse.pio` | complete | camera + strobe pulse gen (IRQ 2 trigger) |
+| `firmware/ade/burst_drive.pio` | complete | 14-instruction bipolar burst; fires IRQ 2 + IRQ 4 |
+| `firmware/ade/burst_gate.pio` | complete | 8-instruction OE+PDAMP gate; fires IRQ 5 |
+| `firmware/burst.pio` | stale (repo root) | original scaffolding; can be removed |
+| `firmware/CMakeLists.txt` | complete | ADE block added (mirrors MUX pattern) |
+| `firmware/CMakePresets.json` | complete | `ade` preset: pico, ADE=ON, MUX=OFF |
+| `firmware/hw/acquisition.h/.c` | complete | `release_pulser` + `reclaim_pulser` added |
+| `firmware/main.c` | complete | 12 ADE REPL commands wired under `#ifdef ADE` |
 
 ---
 
-## Known Bugs in Scaffolding (fix these first)
-
-1. **`ade.c:32`** — `float div = (float)clock_get_hz(clk_sys) / 10e6f;`
-   → should be `/ (float)ADE_CLK` (i.e. 2000000). Wrong clock = wrong timing.
-
-2. **`ade_init()` SM claims** — `pio_sm_claim(pio_ade, 0)` and `pio_sm_claim(pio_ade, 1)`
-   will **panic** at runtime: SM0/SM1 are already owned by `u4rk_acquisition_init()`.
-   Fix: claim only SM2 + SM3 at init; SM0/SM1 are claimed by `ade_arm_ejection()`.
-
-3. **`burst.pio` C-SDK** (line ~34) — calls `delayed_pulse_get_default_config(offset)`
-   (copy-paste error). Fixed when content is rewritten as `burst_drive.pio`.
-
-4. **`ade_init()` burst SM never initialized** — `offset_burst` computed but `burst_init()`
-   never called. Moot once burst moves to ejection-mode init only.
-
----
-
-## ade_config Struct (ade.h)
+## ade_config_t Struct (ade.h)
 
 ```c
 typedef struct {
-    uint camera_exposure;   // µs → ticks at ADE_CLK
-    uint camera_trigger;    // delay after burst start, µs → ticks
-    uint strobe_width;      // µs → ticks
-    uint strobe_trigger;    // delay after burst start, µs → ticks
-    uint burst_count;       // number of bipolar cycles
-    uint burst_freq;        // Hz
+    uint camera_exposure;   // camera pulse width (µs)
+    uint camera_trigger;    // camera delay from burst start (µs)
+    uint strobe_width;      // strobe pulse width (µs)
+    uint strobe_trigger;    // strobe delay from burst start (µs)
+    uint burst_count;       // number of bipolar cycles per ejection
+    uint burst_freq;        // burst frequency (Hz)
     bool camera_enabled;
     bool strobe_enabled;
     bool log_enabled;
-} ade_config;
+} ade_config_t;
 ```
 
-Add `ade_mode_t current_mode` (enum: `ADE_MODE_CALIBRATION` / `ADE_MODE_EJECTION`)
-as static variable in `ade.c`.
+`ade_mode_t current_mode` (enum: `ADE_MODE_CALIBRATION` / `ADE_MODE_EJECTION`)
+is a static variable in `ade.c`.
 
 ---
 
 ## REPL Commands (main.c)
 
-All currently commented out. Wire these under `#ifdef ADE`:
+All wired under `#ifdef ADE`. `fire` dispatches as single-word command.
 
-| Command string | Handler | Status |
-|----------------|---------|--------|
-| `set camtrig` | `camtrig_set` | TODO |
-| `set camexp` | `camexp_set` | TODO |
-| `set strobtrig` | `strobtrig_set` | TODO |
-| `set strobwidth` | `strobwidth_set` | TODO |
-| `enable logging` | `logging_enable` | TODO |
-| `enable camera` | `camera_enable` | TODO |
-| `enable strobe` | `strobe_enable` | TODO |
-| `arm eject` | `ade_arm_ejection` | TODO |
-| `arm calibration` | `ade_arm_calibration` | TODO |
-| `fire` | `ade_fire` | TODO |
+| Command | Handler | Description |
+|---------|---------|-------------|
+| `set burstcount <n>` | `burstcount_set` | Bipolar cycle count (≥1) |
+| `set burstfreq <hz>` | `burstfreq_set` | Burst frequency in Hz |
+| `set camtrig <us>` | `camtrig_set` | Camera trigger delay from burst start |
+| `set camexp <us>` | `camexp_set` | Camera exposure pulse width |
+| `set strobtrig <us>` | `strobtrig_set` | Strobe trigger delay from burst start |
+| `set strobwidth <us>` | `strobwidth_set` | Strobe pulse width |
+| `enable logging` | `logging_enable` | Print timing summary on each fire |
+| `enable camera` | `camera_enable` | Arm camera trigger SM on next fire |
+| `enable strobe` | `strobe_enable` | Arm strobe trigger SM on next fire |
+| `arm eject` | `ade_arm_ejection` | Switch to ejection mode (loads burst programs) |
+| `arm calibration` | `ade_arm_calibration` | Switch back to imaging mode (restores pulser) |
+| `fire` | `ade_fire` | Execute ejection sequence |
 
 ---
 
@@ -159,7 +144,7 @@ read
 - [x] `firmware/ade/burst_gate.pio` — created (8 instructions)
 - [x] `firmware/ade/ade.c` — fully implemented
 - [x] `firmware/ade/ade.h` — rewritten with mode enum, all declarations
-- [x] `firmware/main.c` — all 10 ADE REPL commands wired
+- [x] `firmware/main.c` — all 12 ADE REPL commands wired (`set burstcount`, `set burstfreq` added in d7a533e)
 - [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
 - [x] Hardware smoke test (RP2040, 2026-10-07): arm eject → fire×2 → arm calibration → start acq all pass
 

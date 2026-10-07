@@ -17,6 +17,8 @@
 #include "u4rk.h"
 #include "acquisition.h"
 
+#include "hardware/pio_instructions.h"
+
 #include "delayed_pulse.pio.h"
 #include "burst_drive.pio.h"
 #include "burst_gate.pio.h"
@@ -210,6 +212,10 @@ void ade_fire(const char *args) {
     uint32_t mask = (1u << sm_burst_drive) | (1u << sm_burst_gate);
     if (config.camera_enabled) mask |= (1u << sm_camera);
     if (config.strobe_enabled) mask |= (1u << sm_strobe);
+    if (config.log_enabled)
+        printf("ade: fire mask=0x%02x cam_en=%d(sm%u) strob_en=%d(sm%u)\n",
+               (unsigned)mask, (int)config.camera_enabled, sm_camera,
+               (int)config.strobe_enabled, sm_strobe);
     pio_enable_sm_mask_in_sync(pio_ade, mask);
 
     /* Wait for burst_gate IRQ 5 (signals full ejection + damp complete). */
@@ -225,20 +231,22 @@ void ade_fire(const char *args) {
                    (unsigned)offset_burst_gate);
             pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
             pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
-            if (config.camera_enabled)
+            if (config.camera_enabled) {
                 pio_sm_set_enabled(pio_ade, sm_camera, false);
-            if (config.strobe_enabled)
+                pio_sm_exec(pio_ade, sm_camera, pio_encode_set(pio_pins, 0));
+            }
+            if (config.strobe_enabled) {
                 pio_sm_set_enabled(pio_ade, sm_strobe, false);
+                pio_sm_exec(pio_ade, sm_strobe, pio_encode_set(pio_pins, 0));
+            }
             return;
         }
     }
     pio_interrupt_clear(pio_ade, 5);
     pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
     pio_sm_set_enabled(pio_ade, sm_burst_gate,  false);
-    if (config.camera_enabled)
-        pio_sm_set_enabled(pio_ade, sm_camera, false);
-    if (config.strobe_enabled)
-        pio_sm_set_enabled(pio_ade, sm_strobe, false);
+    /* camera and strobe SMs continue running to complete their pulses;
+     * delayed_pulse_load() on the next fire() disables and resets them. */
 
     if (config.log_enabled) {
         printf("ade: fire done — %u cycles @ %u Hz | "

@@ -20,6 +20,9 @@ static inline void delayed_pulse_init(PIO pio, uint sm, uint offset,
                                               uint out_pin, float clkdiv) {
     pio_gpio_init(pio, out_pin);
     pio_sm_set_consecutive_pindirs(pio, sm, out_pin, 1, true);
+    /* Force pin LOW before pio_sm_init — pio_sm_set_pins_with_mask clobbers SM
+     * config internally, so it must come before pio_sm_init, not after. */
+    pio_sm_set_pins_with_mask(pio, sm, 0u, 1u << out_pin);
 
     pio_sm_config c = delayed_pulse_program_get_default_config(offset);
     sm_config_set_set_pins(&c, out_pin, 1);
@@ -31,6 +34,7 @@ static inline void delayed_pulse_init(PIO pio, uint sm, uint offset,
 static inline void delayed_pulse_load(PIO pio, uint sm, uint offset,
                                               uint32_t delay, uint32_t width) {
     pio_sm_set_enabled(pio, sm, false);
+    pio_sm_exec(pio, sm, pio_encode_set(pio_pins, 0));
     pio_sm_clear_fifos(pio, sm);
     pio_sm_restart(pio, sm);
     pio_sm_exec(pio, sm, pio_encode_jmp(offset));
