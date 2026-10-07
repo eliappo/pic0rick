@@ -161,14 +161,18 @@ read
 - [x] `firmware/ade/ade.h` — rewritten with mode enum, all declarations
 - [x] `firmware/main.c` — all 10 ADE REPL commands wired
 - [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
-- [ ] Hardware smoke test
+- [x] Hardware smoke test (RP2040, 2026-10-07): arm eject → fire×2 → arm calibration → start acq all pass
 
 ---
 
 ## Gotchas
 
-- PIO instruction memory on pio1 is shared. Removing pulser program frees space for
-  burst programs. If instruction memory runs tight, check program sizes.
+- **PIO instruction memory fragmentation (fixed, b8775c5):** pulser (17 instr, 0-16) +
+  delayed_pulse (10 instr, 17-26) = 27 used. After releasing pulser, free blocks are
+  0-16 and 27-31 (non-contiguous). burst_drive (14) takes 0-13; burst_gate (8) needs
+  8 contiguous but only 3+5 remain. Fix: `arm_ejection` removes delayed_pulse, reloads
+  it at 0 first, then loads burst_drive (10-23) + burst_gate (24-31) → 32 exact.
+  `arm_calibration` reverses: removes all three, reclaims pulser, reloads delayed_pulse.
 - `pio_enable_sm_mask_in_sync()` must be used to start burst_drive + burst_gate
   simultaneously (same as pulser). Use `(1u << sm0) | (1u << sm1)`.
 - Tick conversion for delays: `ticks = (us * ADE_CLK) / 1000000` then subtract
