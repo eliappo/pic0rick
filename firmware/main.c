@@ -157,6 +157,8 @@ command_t command_list[] = {
     {"clear mux", max14866_clear},
 #endif
 #ifdef ADE
+    {"set burstcount",  burstcount_set},
+    {"set burstfreq",   burstfreq_set},
     {"set camtrig",     camtrig_set},
     {"set camexp",      camexp_set},
     {"set strobtrig",   strobtrig_set},

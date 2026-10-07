@@ -85,6 +85,9 @@ void ade_fire(const char *args);
 // CONFIGURATION SETTERS  (REPL command handlers: parse args string)
 //---------------------------------------------------------------------------
 
+void burstcount_set(const char *args);
+void burstfreq_set(const char *args);
+
 void camtrig_set(const char *args);
 void camexp_set(const char *args);
 void camera_enable(const char *args);

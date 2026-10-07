@@ -255,6 +255,22 @@ void ade_fire(const char *args) {
 // CONFIGURATION SETTERS
 //---------------------------------------------------------------------------
 
+void burstcount_set(const char *args) {
+    uint n = (uint)atoi(args);
+    if (n == 0) { printf("burst count must be >= 1\n"); return; }
+    config.burst_count = n;
+    printf("burst_count=%u\n", config.burst_count);
+}
+
+void burstfreq_set(const char *args) {
+    uint f = (uint)atoi(args);
+    if (f == 0) { printf("burst freq must be >= 1 Hz\n"); return; }
+    uint32_t half = ADE_BURST_CLK / (2u * f);
+    if (half < 4u) { printf("freq too high (max ~%u Hz)\n", ADE_BURST_CLK / 8u); return; }
+    config.burst_freq = f;
+    printf("burst_freq=%u Hz\n", config.burst_freq);
+}
+
 void camtrig_set(const char *args) {
     config.camera_trigger  = (uint)atoi(args);
     printf("camtrig=%u us\n", config.camera_trigger);
