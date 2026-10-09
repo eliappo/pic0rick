@@ -1,0 +1,50 @@
+.program burst
+; IN base pin  = start trigger
+; SET base pin = burst output
+; Setup: push (count - 1), then (half_period - 4)
+
+    pull block          ; count - 1
+    mov isr, osr        ; keep count in ISR
+    pull block          ; half-period stays in OSR
+.wrap_target
+    wait 1 pin 0        ; wait for start trigger
+    irq set 0           ; start camera SM
+    irq set 1           ; start strobe SM
+    mov x, isr          ; pulse counter
+pulse_loop:
+    set pins, 1 [1]     ; high phase (extra cycle balances the low phase)
+    mov y, osr
+high_loop:
+    jmp y-- high_loop
+    set pins, 0
+    mov y, osr
+low_loop:
+    jmp y-- low_loop
+    jmp x-- pulse_loop
+    wait 0 pin 0        ; one burst per trigger edge
+.wrap
+
+% c-sdk {
+
+static inline void burst_init(PIO pio, uint sm, uint offset,
+                                              uint out_pin, float clkdiv) {
+    pio_gpio_init(pio, out_pin);
+    pio_sm_set_consistent_pindirs(pio, sm, out_pin, 1, true);
+
+    pio_sm_config c = delayed_pulse_get_default_config(offset);
+    sm_config_set_set_pins(&c, out_pin, 1);
+    sm_config_set_clkdiv(&c, clkdiv);
+    pio_sm_init(pio, sm, offset, &c);
+}
+
+// delay and width in ticks, both >= 3
+static inline void delayed_pulse_load(PIO pio, uint sm, uint offset,
+                                              uint32_t delay, uint32_t width) {
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_restart(pio, sm);
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+    pio_sm_put_blocking(pio, sm, delay - 3);
+    pio_sm_put_blocking(pio, sm, width - 3);
+}
+%}
