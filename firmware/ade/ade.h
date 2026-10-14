@@ -32,9 +32,9 @@
 #define ADE_OUTPUT_P_POS    11      // GPIO11: P+ (shared with pulser drive)
 #define ADE_OUTPUT_P_NEG    12      // GPIO12: P- (shared with pulser drive)
 #define ADE_CAMERA_TRIGGER  18      // GPIO18: camera trigger output
-#define ADE_STROBE_TRIGGER  19      // GPIO19: strobe trigger output
-#define ADE_MOTOR_STEP      20      // GPIO20: stepper step (reserved, unused)
-#define ADE_MOTOR_DIR       21      // GPIO21: stepper dir  (reserved, unused)
+#define ADE_STROBE_TRIGGER  21      // GPIO19: strobe trigger output
+#define ADE_MOTOR_STEP      99      // GPIO20: stepper step (reserved, unused)
+#define ADE_MOTOR_DIR       99      // GPIO21: stepper dir  (reserved, unused)
 
 #define ADE_CLK             2000000     // delayed_pulse SM clock (2 MHz, 0.5 µs/tick)
 #define ADE_BURST_CLK       125000000   // burst_drive/gate SM clock (125 MHz, 8 ns/tick)
