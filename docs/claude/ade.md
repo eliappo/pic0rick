@@ -43,9 +43,13 @@ Enabled at build time with `-DADE=ON` (see `firmware/CMakePresets.json` preset `
 **Camera trigger polarity (active-LOW):** GPIO18 idles HIGH, pulse starts on the
 falling edge and ends on the rising edge. The `delayed_pulse` program itself is
 active-HIGH (idle 0, pulse 1); the camera pin is inverted at the pad via
-`gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT)` in `ade_init()`.
-Set once — survives arm_eject/arm_calibration re-inits because `pio_gpio_init`
-only sets funcsel, leaving outover untouched. Strobe (GPIO19) stays active-HIGH.
+`gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT)`. **The invert must be
+re-applied after every `delayed_pulse_init` for the camera SM:** `pio_gpio_init()`
+→ `gpio_set_function()` rewrites the whole GPIO ctrl register and *clears* OUTOVER.
+So it lives in the `ade_camera_init()` helper (init + invert together), called
+from `ade_init`, `ade_arm_ejection`, and `ade_arm_calibration`. Applying it only
+once in `ade_init` leaves the camera LOW after the first `arm eject`. Strobe
+(GPIO19) stays active-HIGH.
 
 ### Ejection mode (after `arm eject`)
 | SM | Program | Pins | Purpose |

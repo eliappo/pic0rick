@@ -62,6 +62,18 @@ static uint32_t us_to_burst_ticks(uint us) {
 // INIT
 //---------------------------------------------------------------------------
 
+/* Init the camera delayed_pulse SM and make GPIO18 active-LOW: idle HIGH, pulse
+ * starts on the falling edge, ends on the rising edge. The invert MUST be set
+ * after delayed_pulse_init — pio_gpio_init() → gpio_set_function() rewrites the
+ * whole GPIO ctrl register and clears OUTOVER, so re-applying it here keeps the
+ * camera inverted across every arm_eject/arm_calibration re-init. Strobe is left
+ * active-HIGH. */
+static void ade_camera_init(float delayed_div) {
+    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
+                       ADE_CAMERA_TRIGGER, delayed_div);
+    gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT);
+}
+
 void ade_init(void) {
     float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
 
@@ -69,16 +81,9 @@ void ade_init(void) {
     sm_camera = pio_claim_unused_sm(pio_ade, true);
     sm_strobe  = pio_claim_unused_sm(pio_ade, true);
     offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
+    ade_camera_init(delayed_div);
     delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
                        ADE_STROBE_TRIGGER, delayed_div);
-
-    /* Camera trigger is active-LOW: idle HIGH, falling edge starts the pulse,
-     * rising edge ends it. Invert the pad output so the PIO's 0/1 drive maps to
-     * HIGH/LOW. Persists across arm_eject/arm_calibration re-inits (pio_gpio_init
-     * sets funcsel only, leaves outover untouched). Strobe stays active-HIGH. */
-    gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT);
 
     config = (ade_config_t){
         .camera_exposure = 1000,
@@ -124,8 +129,7 @@ void ade_arm_ejection(const char *args) {
     offset_burst_drive   = pio_add_program(pio_ade, &burst_drive_program);
     offset_burst_gate    = pio_add_program(pio_ade, &burst_gate_program);
 
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
+    ade_camera_init(delayed_div);
     delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
                        ADE_STROBE_TRIGGER, delayed_div);
 
@@ -164,8 +168,7 @@ void ade_arm_calibration(const char *args) {
 
     float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
     offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
+    ade_camera_init(delayed_div);
     delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
                        ADE_STROBE_TRIGGER, delayed_div);
 
