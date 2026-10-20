@@ -10,6 +10,17 @@
         "ADE": "ON",
         "MUX": "OFF"
       }
+    },
+    {
+      "name": "ade-pico2",
+      "displayName": "ADE (RP2350 / Pico 2, no MUX)",
+      "binaryDir": "${sourceDir}/build-ade-pico2",
+      "cacheVariables": {
+        "PICO_BOARD": "pico2",
+        "PICO_PLATFORM": "rp2350-arm-s",
+        "ADE": "ON",
+        "MUX": "OFF"
+      }
     }
   ]
 }

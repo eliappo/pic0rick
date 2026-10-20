@@ -39,7 +39,6 @@
 #define ADE_CLK             2000000     // delayed_pulse SM clock (2 MHz, 0.5 µs/tick)
 #define ADE_BURST_CLK       125000000   // burst_drive/gate SM clock (125 MHz, 8 ns/tick)
 #define ADE_DAMP_US         10u         // default post-burst PDAMP duration (µs)
-#define ADE_FIRE_TIMEOUT_US 5000u       // ade_fire() watchdog (5 ms — tight during debug)
 
 //---------------------------------------------------------------------------
 // TYPES

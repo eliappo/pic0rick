@@ -74,6 +74,12 @@ void ade_init(void) {
     delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
                        ADE_STROBE_TRIGGER, delayed_div);
 
+    /* Camera trigger is active-LOW: idle HIGH, falling edge starts the pulse,
+     * rising edge ends it. Invert the pad output so the PIO's 0/1 drive maps to
+     * HIGH/LOW. Persists across arm_eject/arm_calibration re-inits (pio_gpio_init
+     * sets funcsel only, leaves outover untouched). Strobe stays active-HIGH. */
+    gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT);
+
     config = (ade_config_t){
         .camera_exposure = 1000,
         .camera_trigger  = 0,
@@ -218,29 +224,11 @@ void ade_fire(const char *args) {
                (int)config.strobe_enabled, sm_strobe);
     pio_enable_sm_mask_in_sync(pio_ade, mask);
 
-    /* Wait for burst_gate IRQ 5 (signals full ejection + damp complete). */
-    uint64_t deadline = time_us_64() + ADE_FIRE_TIMEOUT_US;
+    /* Wait for burst_gate IRQ 5 (signals full ejection + damp complete).
+     * Watchdog disabled: busy-wait with no deadline. If IRQ 5 never fires,
+     * this hangs forever (recover via BOOTSEL / reboot-dfu). */
     while (!pio_interrupt_get(pio_ade, 5)) {
-        if (time_us_64() > deadline) {
-            printf("ade: fire timeout — pio_irq=0x%02x "
-                   "drive_pc=%u(base=%u) gate_pc=%u(base=%u)\n",
-                   (unsigned)(pio_ade->irq & 0xFF),
-                   (unsigned)(pio_ade->sm[sm_burst_drive].addr),
-                   (unsigned)offset_burst_drive,
-                   (unsigned)(pio_ade->sm[sm_burst_gate].addr),
-                   (unsigned)offset_burst_gate);
-            pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
-            pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
-            if (config.camera_enabled) {
-                pio_sm_set_enabled(pio_ade, sm_camera, false);
-                pio_sm_exec(pio_ade, sm_camera, pio_encode_set(pio_pins, 0));
-            }
-            if (config.strobe_enabled) {
-                pio_sm_set_enabled(pio_ade, sm_strobe, false);
-                pio_sm_exec(pio_ade, sm_strobe, pio_encode_set(pio_pins, 0));
-            }
-            return;
-        }
+        tight_loop_contents();
     }
     pio_interrupt_clear(pio_ade, 5);
     pio_sm_set_enabled(pio_ade, sm_burst_drive, false);

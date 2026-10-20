@@ -3,7 +3,15 @@
 **READ THIS FILE at the start of every ADE session. UPDATE it before ending.**
 
 Branch: `acoustic-droplet-ejection-hack`
-Build check: `cd firmware && cmake --preset ade && cmake --build build-ade 2>&1 | head -40`
+Build check (RP2040): `cd firmware && cmake --preset ade && cmake --build build-ade 2>&1 | head -40`
+Build check (RP2350 / Pico 2 W): `cd firmware && cmake --preset ade-pico2 && cmake --build build-ade-pico2 2>&1 | head -40`
+
+Two presets in `CMakePresets.json`: `ade` (PICO_BOARD=pico, RP2040) and
+`ade-pico2` (PICO_BOARD=pico2 + PICO_PLATFORM=rp2350-arm-s, RP2350 / Pico 2 W).
+Flash the uf2 matching the chip — an RP2040 uf2 will not boot on RP2350 (no CDC,
+picocom/serial fails). Timing is clock-agnostic: all PIO clkdivs are derived from
+`clock_get_hz(clk_sys)` at runtime, so burst/delay timing is identical at 125 MHz
+(RP2040) and 150 MHz (RP2350).
 
 ---
 
@@ -29,8 +37,15 @@ Enabled at build time with `-DADE=ON` (see `firmware/CMakePresets.json` preset `
 | pio1 SM0 | `u4rk_pulser` (drive) | GPIO11/12 | P+/P- drive |
 | pio1 SM1 | `u4rk_pulser` (gate) | GPIO16/17 | OE/PDAMP |
 | pio0 SM | `u4rk_adc` | GPIO0–10 | ADC capture |
-| pio1 SM2 | `delayed_pulse` | GPIO18 | Camera trigger (init at boot) |
-| pio1 SM3 | `delayed_pulse` | GPIO19 | Strobe trigger (init at boot) |
+| pio1 SM2 | `delayed_pulse` | GPIO18 | Camera trigger (init at boot; **active-LOW**) |
+| pio1 SM3 | `delayed_pulse` | GPIO19 | Strobe trigger (init at boot; active-HIGH) |
+
+**Camera trigger polarity (active-LOW):** GPIO18 idles HIGH, pulse starts on the
+falling edge and ends on the rising edge. The `delayed_pulse` program itself is
+active-HIGH (idle 0, pulse 1); the camera pin is inverted at the pad via
+`gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT)` in `ade_init()`.
+Set once — survives arm_eject/arm_calibration re-inits because `pio_gpio_init`
+only sets funcsel, leaving outover untouched. Strobe (GPIO19) stays active-HIGH.
 
 ### Ejection mode (after `arm eject`)
 | SM | Program | Pins | Purpose |
@@ -148,6 +163,8 @@ read
 - [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
 - [x] Hardware smoke test (RP2040, 2026-10-07): burst, camera (50µs), strobe (5µs) all verified on scope
 - [x] Camera/strobe trigger fixes (76207da)
+- [x] RP2350 / Pico 2 W support (`ade-pico2` preset), camera trigger active-LOW,
+      fire watchdog removed — verified on RP2350 hardware (2026-10-20)
 
 ---
 
@@ -168,6 +185,10 @@ read
   SMs run to completion, wrap to `wait 1 irq 2`, and idle there. `delayed_pulse_load()`
   on the next `fire()` disables + resets them. Consequence: strobe trigger delay can
   safely exceed burst+damp duration (~30µs at default settings).
+- **`ade_fire()` watchdog removed:** the wait for burst_gate IRQ 5 is now an
+  unbounded busy-wait (`tight_loop_contents()`), no deadline. `ADE_FIRE_TIMEOUT_US`
+  deleted from `ade.h`. If IRQ 5 never fires, `fire` hangs forever — recover via
+  BOOTSEL / `reboot-dfu`.
 - `pio_enable_sm_mask_in_sync()` must be used to start all SMs simultaneously.
 - Tick conversion: `ticks = us * ADE_CLK / 1000000`; subtract 3 for `delayed_pulse`
   loop overhead (minimum 4 ticks enforced in `us_to_delayed_ticks()`).
