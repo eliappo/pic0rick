@@ -5,6 +5,13 @@ finished. Each entry links to its commit log in `docs/claude/commits/`.
 
 ---
 
+## 2026-11-17
+
+- **ADE trigger-in mode (firmware 0.1.12, branch `ade-trigger-in`).** `arm trigger`:
+  camera/strobe fire on each GPIO20 edge with configurable delays, no burst;
+  `set trigedge rising|falling`. See
+  [commits/2026-11-17-ade-trigger-in.md](commits/2026-11-17-ade-trigger-in.md).
+
 ## 2026-09-14
 
 - **README refresh (on main).** Quick start + command tables updated for the DSP

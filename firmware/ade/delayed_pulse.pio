@@ -14,6 +14,44 @@ width_loop:
     set pins, 0
 .wrap
 
+.program delayed_pulse_gpio
+; Same as delayed_pulse, but triggered by an edge on an external GPIO (IN base)
+; instead of IRQ 2. Continuous: re-arms after every pulse. Edges arriving while
+; a pulse is in progress are ignored; re-arm requires a fresh edge (wait 0 first).
+; Falling-edge triggering is done by inverting the input pad (gpio_set_inover).
+    pull block          ; delay - 3
+    mov isr, osr
+    pull block          ; width - 3
+.wrap_target
+    wait 0 pin 0        ; IN base = trigger pin
+    wait 1 pin 0        ; edge detected
+    mov x, isr
+delay_loop:
+    jmp x-- delay_loop
+    set pins, 1
+    mov y, osr
+width_loop:
+    jmp y-- width_loop
+    set pins, 0
+.wrap
+
+% c-sdk {
+
+static inline void delayed_pulse_gpio_init(PIO pio, uint sm, uint offset,
+                                           uint out_pin, uint trig_pin,
+                                           float clkdiv) {
+    pio_gpio_init(pio, out_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, out_pin, 1, true);
+    pio_sm_set_pins_with_mask(pio, sm, 0u, 1u << out_pin);
+
+    pio_sm_config c = delayed_pulse_gpio_program_get_default_config(offset);
+    sm_config_set_set_pins(&c, out_pin, 1);
+    sm_config_set_in_pins(&c, trig_pin);
+    sm_config_set_clkdiv(&c, clkdiv);
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
+
 % c-sdk {
 
 static inline void delayed_pulse_init(PIO pio, uint sm, uint offset,

@@ -3,19 +3,31 @@
 **READ THIS FILE at the start of every ADE session. UPDATE it before ending.**
 
 Branch: `acoustic-droplet-ejection-hack`
-Build check: `cd firmware && cmake --preset ade && cmake --build build-ade 2>&1 | head -40`
+Build check (RP2040): `cd firmware && cmake --preset ade && cmake --build build-ade 2>&1 | head -40`
+Build check (RP2350 / Pico 2 W): `cd firmware && cmake --preset ade-pico2 && cmake --build build-ade-pico2 2>&1 | head -40`
+
+Two presets in `CMakePresets.json`: `ade` (PICO_BOARD=pico, RP2040) and
+`ade-pico2` (PICO_BOARD=pico2 + PICO_PLATFORM=rp2350-arm-s, RP2350 / Pico 2 W).
+Flash the uf2 matching the chip — an RP2040 uf2 will not boot on RP2350 (no CDC,
+picocom/serial fails). Timing is clock-agnostic: all PIO clkdivs are derived from
+`clock_get_hz(clk_sys)` at runtime, so burst/delay timing is identical at 125 MHz
+(RP2040) and 150 MHz (RP2350).
 
 ---
 
 ## What ADE Does
 
-Plug-in board on top of the pulse-echo board. Two operational modes share the
-same transducer GPIOs (11/12 drive, 16/17 gate):
+Plug-in board on top of the pulse-echo board. Three operational modes (two of
+them share the transducer GPIOs 11/12 drive, 16/17 gate):
 
 1. **Calibration** — standard pulse-echo imaging to find transducer-to-liquid
    distance. Uses existing REPL `start acq` / `read` commands unmodified.
 2. **Ejection** — sinusoidal burst drives transducer N cycles at a set frequency.
    Camera and strobe triggers fire synchronously with configurable delays.
+3. **Trigger** (`arm trigger`) — no burst. Camera + strobe fire on every edge of
+   external input **GPIO20** (`ADE_TRIGGER_IN`, 3.3 V max), same delay/width
+   settings, measured from the edge. Continuous until another mode is armed.
+   Mutually exclusive with ejection (PIO memory), switch at runtime.
 
 Enabled at build time with `-DADE=ON` (see `firmware/CMakePresets.json` preset `ade`).
 
@@ -29,8 +41,19 @@ Enabled at build time with `-DADE=ON` (see `firmware/CMakePresets.json` preset `
 | pio1 SM0 | `u4rk_pulser` (drive) | GPIO11/12 | P+/P- drive |
 | pio1 SM1 | `u4rk_pulser` (gate) | GPIO16/17 | OE/PDAMP |
 | pio0 SM | `u4rk_adc` | GPIO0–10 | ADC capture |
-| pio1 SM2 | `delayed_pulse` | GPIO18 | Camera trigger (init at boot) |
-| pio1 SM3 | `delayed_pulse` | GPIO19 | Strobe trigger (init at boot) |
+| pio1 SM2 | `delayed_pulse` | GPIO18 | Camera trigger (init at boot; **active-LOW**) |
+| pio1 SM3 | `delayed_pulse` | GPIO21 | Strobe trigger (init at boot; active-HIGH) |
+
+**Camera trigger polarity (active-LOW):** GPIO18 idles HIGH, pulse starts on the
+falling edge and ends on the rising edge. The `delayed_pulse` program itself is
+active-HIGH (idle 0, pulse 1); the camera pin is inverted at the pad via
+`gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT)`. **The invert must be
+re-applied after every `delayed_pulse_init` for the camera SM:** `pio_gpio_init()`
+→ `gpio_set_function()` rewrites the whole GPIO ctrl register and *clears* OUTOVER.
+So it lives in the `ade_camera_init()` helper (init + invert together), called
+from `ade_init`, `ade_arm_ejection`, and `ade_arm_calibration`. Applying it only
+once in `ade_init` leaves the camera LOW after the first `arm eject`. Strobe
+(GPIO21) stays active-HIGH.
 
 ### Ejection mode (after `arm eject`)
 | SM | Program | Pins | Purpose |
@@ -38,10 +61,28 @@ Enabled at build time with `-DADE=ON` (see `firmware/CMakePresets.json` preset `
 | pio1 SM0 | `burst_drive` | GPIO11/12 | Bipolar burst N cycles |
 | pio1 SM1 | `burst_gate` | GPIO16/17 | OE during burst + PDAMP after |
 | pio1 SM2 | `delayed_pulse` | GPIO18 | Camera trigger |
-| pio1 SM3 | `delayed_pulse` | GPIO19 | Strobe trigger |
+| pio1 SM3 | `delayed_pulse` | GPIO21 | Strobe trigger |
+
+### Trigger mode (after `arm trigger`)
+| SM | Program | Pins | Purpose |
+|----|---------|------|---------|
+| pio1 SM0/SM1 | `u4rk_pulser` | 11/12, 16/17 | unchanged (calibration `start acq` still works) |
+| pio1 SM2 | `delayed_pulse_gpio` | out GPIO18, in GPIO20 | Camera trigger (active-LOW) |
+| pio1 SM3 | `delayed_pulse_gpio` | out GPIO21, in GPIO20 | Strobe trigger |
 
 Mode switch: `arm eject` releases SM0/SM1 from pulser, loads burst programs.
-`arm calibration` reverses this.
+`arm calibration` reverses this. `arm trigger` goes via calibration state, then
+swaps `delayed_pulse` (10) for `delayed_pulse_gpio` (11): pulser 0-16 + 17-27 =
+28/32. Leaving trigger mode swaps back (`ade_trigger_to_calibration`).
+
+`delayed_pulse_gpio` = `delayed_pulse` with `wait 1 irq 2` replaced by
+`wait 0 pin 0; wait 1 pin 0` (IN base = GPIO20). Re-arm only after delay+width
+elapsed and on a fresh edge; edges during a pulse are ignored. Jitter ≤ 1 tick
+(0.5 µs). Falling edge = `gpio_set_inover(20, INVERT)` (`set trigedge falling`);
+must be applied after any `gpio_set_function` on 20 (clears INOVER). GPIO20
+init at boot: SIO input + pull-down. In trigger mode setters (`camtrig`, `camexp`,
+`strobtrig`, `strobwidth`, `enable camera/strobe`, `trigedge`) re-load and
+restart the SMs live (`ade_trigger_load_and_start`).
 
 ---
 
@@ -96,7 +137,7 @@ is a static variable in `ade.c`.
 
 ## REPL Commands (main.c)
 
-All wired under `#ifdef ADE`. `fire` dispatches as single-word command.
+All wired under `#ifdef ADE` (14 commands). `fire` dispatches as single-word command.
 
 | Command | Handler | Description |
 |---------|---------|-------------|
@@ -111,6 +152,8 @@ All wired under `#ifdef ADE`. `fire` dispatches as single-word command.
 | `enable strobe` | `strobe_enable` | Arm strobe trigger SM on next fire |
 | `arm eject` | `ade_arm_ejection` | Switch to ejection mode (loads burst programs) |
 | `arm calibration` | `ade_arm_calibration` | Switch back to imaging mode (restores pulser) |
+| `arm trigger` | `ade_arm_trigger` | External trigger-in mode (GPIO20), camera/strobe only |
+| `set trigedge rising\|falling` | `trigedge_set` | Trigger-in edge (default rising) |
 | `fire` | `ade_fire` | Execute ejection sequence |
 
 ---
@@ -131,6 +174,20 @@ start acq 200 200 2000            # imaging still works after mode switch
 read
 ```
 
+Trigger-in test (function generator 3.3 V square wave → GPIO20):
+```
+set camtrig 100
+set camexp 50
+set strobtrig 120
+set strobwidth 5
+enable camera
+enable strobe
+arm trigger                       # every rising edge: GPIO18 low @100µs/50µs, GPIO21 high @120µs/5µs
+set trigedge falling              # now follows falling edges
+arm eject                         # burst mode still works
+fire
+```
+
 ---
 
 ## Implementation Status
@@ -148,6 +205,18 @@ read
 - [x] Build passes (`cmake --preset ade && cmake --build build-ade`)
 - [x] Hardware smoke test (RP2040, 2026-10-07): burst, camera (50µs), strobe (5µs) all verified on scope
 - [x] Camera/strobe trigger fixes (76207da)
+- [x] RP2350 / Pico 2 W support (`ade-pico2` preset), camera trigger active-LOW,
+      fire watchdog removed — verified on RP2350 hardware (2026-10-20)
+- [x] Trigger-in mode (`arm trigger`, GPIO20, `set trigedge`) — branch
+      `ade-trigger-in`, builds on both presets (2026-11-17)
+- [x] Trigger-in firmware smoke test on RP2350 (board serial 0D26F3E8B47D1608,
+      2026-11-23): all mode switches (trigger↔eject↔calibration), `fire`,
+      `start acq` OK. Reported offsets: trigger dp@4; eject drive@8 gate@0 dp@22
+      (SDK allocates PIO programs top-down, so offsets differ from the comments; all fit).
+- [ ] Trigger-in scope verification with a real edge on GPIO20; decide default edge
+- [ ] One unexplained hang (no USB output, device still enumerated) right after
+      the reboot-dfu → reflash cycle, mid command sequence. Not reproduced after
+      power-cycle with the identical sequence. Watch for it.
 
 ---
 
@@ -168,9 +237,14 @@ read
   SMs run to completion, wrap to `wait 1 irq 2`, and idle there. `delayed_pulse_load()`
   on the next `fire()` disables + resets them. Consequence: strobe trigger delay can
   safely exceed burst+damp duration (~30µs at default settings).
+- **`ade_fire()` watchdog removed:** the wait for burst_gate IRQ 5 is now an
+  unbounded busy-wait (`tight_loop_contents()`), no deadline. `ADE_FIRE_TIMEOUT_US`
+  deleted from `ade.h`. If IRQ 5 never fires, `fire` hangs forever — recover via
+  BOOTSEL / `reboot-dfu`.
 - `pio_enable_sm_mask_in_sync()` must be used to start all SMs simultaneously.
 - Tick conversion: `ticks = us * ADE_CLK / 1000000`; subtract 3 for `delayed_pulse`
   loop overhead (minimum 4 ticks enforced in `us_to_delayed_ticks()`).
-- Motor control (GPIO20/21) — intentionally skipped, commented out.
+- Motor control — skipped (defines = 99). Its old pins are taken: GPIO20 = trigger-in, GPIO21 = strobe.
+- GPIO20 trigger-in is `MAX14866_SPI_LE` in MUX builds — fine since ADE forces MUX off.
 - MUX (MAX14866) shares GPIO18–21 with ADE — cannot enable both simultaneously.
   `-DADE=ON` implies `-DMUX=OFF` in the build preset.

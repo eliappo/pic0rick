@@ -17,6 +17,8 @@
 #include "u4rk.h"
 #include "acquisition.h"
 
+#include <string.h>
+
 #include "hardware/pio_instructions.h"
 
 #include "delayed_pulse.pio.h"
@@ -62,17 +64,57 @@ static uint32_t us_to_burst_ticks(uint us) {
 // INIT
 //---------------------------------------------------------------------------
 
+/* Init the camera SM and make GPIO18 active-LOW: idle HIGH, pulse starts on the
+ * falling edge, ends on the rising edge. The invert MUST be set after the PIO
+ * init — pio_gpio_init() → gpio_set_function() rewrites the whole GPIO ctrl
+ * register and clears OUTOVER, so re-applying it here keeps the camera inverted
+ * across every mode switch re-init. Strobe is left active-HIGH.
+ * gpio_trigger selects the program: false = delayed_pulse (IRQ 2 from burst),
+ * true = delayed_pulse_gpio (edge on ADE_TRIGGER_IN). */
+static void ade_camera_init(float delayed_div, bool gpio_trigger) {
+    if (gpio_trigger)
+        delayed_pulse_gpio_init(pio_ade, sm_camera, offset_delayed_pulse,
+                                ADE_CAMERA_TRIGGER, ADE_TRIGGER_IN, delayed_div);
+    else
+        delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
+                           ADE_CAMERA_TRIGGER, delayed_div);
+    gpio_set_outover(ADE_CAMERA_TRIGGER, GPIO_OVERRIDE_INVERT);
+}
+
+static void ade_strobe_init(float delayed_div, bool gpio_trigger) {
+    if (gpio_trigger)
+        delayed_pulse_gpio_init(pio_ade, sm_strobe, offset_delayed_pulse,
+                                ADE_STROBE_TRIGGER, ADE_TRIGGER_IN, delayed_div);
+    else
+        delayed_pulse_init(pio_ade, sm_strobe, offset_delayed_pulse,
+                           ADE_STROBE_TRIGGER, delayed_div);
+}
+
+static float ade_delayed_div(void) {
+    return (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
+}
+
+/* Trigger-in pad: input with pull-down; falling-edge mode inverts the input
+ * path so the PIO program (which waits for 0 then 1) sees a falling edge as a
+ * rising one. Must be applied after gpio_init (gpio_set_function clears INOVER). */
+static void ade_trigger_pin_apply(void) {
+    gpio_set_inover(ADE_TRIGGER_IN, config.trigger_falling
+                    ? GPIO_OVERRIDE_INVERT : GPIO_OVERRIDE_NORMAL);
+}
+
 void ade_init(void) {
-    float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
+    float delayed_div = ade_delayed_div();
 
     pio_ade = pio1;
     sm_camera = pio_claim_unused_sm(pio_ade, true);
     sm_strobe  = pio_claim_unused_sm(pio_ade, true);
     offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
-    delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
-                       ADE_STROBE_TRIGGER, delayed_div);
+    ade_camera_init(delayed_div, false);
+    ade_strobe_init(delayed_div, false);
+
+    gpio_init(ADE_TRIGGER_IN);
+    gpio_set_dir(ADE_TRIGGER_IN, GPIO_IN);
+    gpio_pull_down(ADE_TRIGGER_IN);
 
     config = (ade_config_t){
         .camera_exposure = 1000,
@@ -84,6 +126,7 @@ void ade_init(void) {
         .camera_enabled  = false,
         .strobe_enabled  = false,
         .log_enabled     = false,
+        .trigger_falling = false,
     };
     current_mode = ADE_MODE_CALIBRATION;
 }
@@ -92,11 +135,85 @@ void ade_init(void) {
 // MODE SWITCH
 //---------------------------------------------------------------------------
 
+/* Trigger mode → calibration state: swap delayed_pulse_gpio back to
+ * delayed_pulse on the camera/strobe SMs. Pulser stays loaded throughout. */
+static void ade_trigger_to_calibration(void) {
+    pio_sm_set_enabled(pio_ade, sm_camera, false);
+    pio_sm_set_enabled(pio_ade, sm_strobe,  false);
+    pio_remove_program(pio_ade, &delayed_pulse_gpio_program, offset_delayed_pulse);
+
+    float delayed_div = ade_delayed_div();
+    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
+    ade_camera_init(delayed_div, false);
+    ade_strobe_init(delayed_div, false);
+    gpio_set_inover(ADE_TRIGGER_IN, GPIO_OVERRIDE_NORMAL);
+
+    current_mode = ADE_MODE_CALIBRATION;
+}
+
+/* Ejection mode → calibration state: drop burst programs, restore pulser. */
+static void ade_ejection_to_calibration(void) {
+    pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
+    pio_sm_set_enabled(pio_ade, sm_burst_gate,  false);
+    pio_sm_set_enabled(pio_ade, sm_camera,       false);
+    pio_sm_set_enabled(pio_ade, sm_strobe,        false);
+    pio_sm_unclaim(pio_ade, sm_burst_drive);
+    pio_sm_unclaim(pio_ade, sm_burst_gate);
+
+    /* Remove all ejection-mode programs to free the full 32-slot space. */
+    pio_remove_program(pio_ade, &burst_gate_program,    offset_burst_gate);
+    pio_remove_program(pio_ade, &burst_drive_program,   offset_burst_drive);
+    pio_remove_program(pio_ade, &delayed_pulse_program, offset_delayed_pulse);
+
+    /* Reclaim pulser → loads at 0-16; then delayed_pulse lands at 17-26. */
+    u4rk_acquisition_reclaim_pulser();
+
+    float delayed_div = ade_delayed_div();
+    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
+    ade_camera_init(delayed_div, false);
+    ade_strobe_init(delayed_div, false);
+
+    current_mode = ADE_MODE_CALIBRATION;
+}
+
+/* Trigger mode: (re)load delay/width into the enabled camera/strobe SMs and
+ * start them in sync. Called on arm and whenever a setting changes. */
+static void ade_trigger_load_and_start(void) {
+    uint32_t mask = 0;
+    if (config.camera_enabled) {
+        delayed_pulse_load(pio_ade, sm_camera, offset_delayed_pulse,
+                           us_to_delayed_ticks(config.camera_trigger),
+                           us_to_delayed_ticks(config.camera_exposure));
+        mask |= 1u << sm_camera;
+    }
+    if (config.strobe_enabled) {
+        delayed_pulse_load(pio_ade, sm_strobe, offset_delayed_pulse,
+                           us_to_delayed_ticks(config.strobe_trigger),
+                           us_to_delayed_ticks(config.strobe_width));
+        mask |= 1u << sm_strobe;
+    }
+    if (mask == 0) {
+        printf("ade: trigger armed but camera and strobe both disabled\n");
+        return;
+    }
+    pio_enable_sm_mask_in_sync(pio_ade, mask);
+    if (config.log_enabled)
+        printf("ade: trigger listening on GPIO%u (%s edge) | "
+               "cam %s trig=%u exp=%u us | strob %s trig=%u w=%u us\n",
+               ADE_TRIGGER_IN, config.trigger_falling ? "falling" : "rising",
+               config.camera_enabled ? "on" : "off",
+               config.camera_trigger, config.camera_exposure,
+               config.strobe_enabled ? "on" : "off",
+               config.strobe_trigger, config.strobe_width);
+}
+
 void ade_arm_ejection(const char *args) {
     if (current_mode == ADE_MODE_EJECTION) {
         printf("ade: already in ejection mode\n");
         return;
     }
+    if (current_mode == ADE_MODE_TRIGGER)
+        ade_trigger_to_calibration();
 
     u4rk_acquisition_release_pulser();
 
@@ -110,7 +227,7 @@ void ade_arm_ejection(const char *args) {
     pio_sm_set_enabled(pio_ade, sm_strobe,  false);
     pio_remove_program(pio_ade, &delayed_pulse_program, offset_delayed_pulse);
 
-    float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
+    float delayed_div = ade_delayed_div();
     float burst_div   = (float)clock_get_hz(clk_sys) / (float)ADE_BURST_CLK;
 
     /* Load in order: delayed_pulse → 0-9, burst_drive → 10-23, burst_gate → 24-31. */
@@ -118,10 +235,8 @@ void ade_arm_ejection(const char *args) {
     offset_burst_drive   = pio_add_program(pio_ade, &burst_drive_program);
     offset_burst_gate    = pio_add_program(pio_ade, &burst_gate_program);
 
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
-    delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
-                       ADE_STROBE_TRIGGER, delayed_div);
+    ade_camera_init(delayed_div, false);
+    ade_strobe_init(delayed_div, false);
 
     sm_burst_drive = pio_claim_unused_sm(pio_ade, true);
     sm_burst_gate  = pio_claim_unused_sm(pio_ade, true);
@@ -140,31 +255,38 @@ void ade_arm_calibration(const char *args) {
         printf("ade: already in calibration mode\n");
         return;
     }
+    if (current_mode == ADE_MODE_EJECTION)
+        ade_ejection_to_calibration();
+    else
+        ade_trigger_to_calibration();
+    printf("ade: calibration mode armed\n");
+}
 
-    pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
-    pio_sm_set_enabled(pio_ade, sm_burst_gate,  false);
-    pio_sm_set_enabled(pio_ade, sm_camera,       false);
-    pio_sm_set_enabled(pio_ade, sm_strobe,        false);
-    pio_sm_unclaim(pio_ade, sm_burst_drive);
-    pio_sm_unclaim(pio_ade, sm_burst_gate);
+void ade_arm_trigger(const char *args) {
+    if (current_mode == ADE_MODE_TRIGGER) {
+        printf("ade: already in trigger mode\n");
+        return;
+    }
+    if (current_mode == ADE_MODE_EJECTION)
+        ade_ejection_to_calibration();
 
-    /* Remove all ejection-mode programs to free the full 32-slot space. */
-    pio_remove_program(pio_ade, &burst_gate_program,    offset_burst_gate);
-    pio_remove_program(pio_ade, &burst_drive_program,   offset_burst_drive);
+    /* Calibration state: pulser 0-16, delayed_pulse 17-26. Swap delayed_pulse
+     * (10) for delayed_pulse_gpio (11) → 17-27, 28/32 used. Ejection programs
+     * cannot coexist (that mode already fills all 32 slots). */
+    pio_sm_set_enabled(pio_ade, sm_camera, false);
+    pio_sm_set_enabled(pio_ade, sm_strobe,  false);
     pio_remove_program(pio_ade, &delayed_pulse_program, offset_delayed_pulse);
 
-    /* Reclaim pulser → loads at 0-16; then delayed_pulse lands at 17-26. */
-    u4rk_acquisition_reclaim_pulser();
+    float delayed_div = ade_delayed_div();
+    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_gpio_program);
+    ade_camera_init(delayed_div, true);
+    ade_strobe_init(delayed_div, true);
+    ade_trigger_pin_apply();
 
-    float delayed_div = (float)clock_get_hz(clk_sys) / (float)ADE_CLK;
-    offset_delayed_pulse = pio_add_program(pio_ade, &delayed_pulse_program);
-    delayed_pulse_init(pio_ade, sm_camera, offset_delayed_pulse,
-                       ADE_CAMERA_TRIGGER, delayed_div);
-    delayed_pulse_init(pio_ade, sm_strobe,  offset_delayed_pulse,
-                       ADE_STROBE_TRIGGER, delayed_div);
-
-    current_mode = ADE_MODE_CALIBRATION;
-    printf("ade: calibration mode armed\n");
+    current_mode = ADE_MODE_TRIGGER;
+    printf("ade: trigger mode armed (GPIO%u, %s edge, dp@%u)\n", ADE_TRIGGER_IN,
+           config.trigger_falling ? "falling" : "rising", offset_delayed_pulse);
+    ade_trigger_load_and_start();
 }
 
 //---------------------------------------------------------------------------
@@ -173,7 +295,9 @@ void ade_arm_calibration(const char *args) {
 
 void ade_fire(const char *args) {
     if (current_mode != ADE_MODE_EJECTION) {
-        printf("ade: run 'arm eject' first\n");
+        printf("ade: run 'arm eject' first%s\n",
+               current_mode == ADE_MODE_TRIGGER
+               ? " (trigger mode fires on GPIO edge, not 'fire')" : "");
         return;
     }
     if (config.burst_count == 0 || config.burst_freq == 0) {
@@ -218,29 +342,11 @@ void ade_fire(const char *args) {
                (int)config.strobe_enabled, sm_strobe);
     pio_enable_sm_mask_in_sync(pio_ade, mask);
 
-    /* Wait for burst_gate IRQ 5 (signals full ejection + damp complete). */
-    uint64_t deadline = time_us_64() + ADE_FIRE_TIMEOUT_US;
+    /* Wait for burst_gate IRQ 5 (signals full ejection + damp complete).
+     * Watchdog disabled: busy-wait with no deadline. If IRQ 5 never fires,
+     * this hangs forever (recover via BOOTSEL / reboot-dfu). */
     while (!pio_interrupt_get(pio_ade, 5)) {
-        if (time_us_64() > deadline) {
-            printf("ade: fire timeout — pio_irq=0x%02x "
-                   "drive_pc=%u(base=%u) gate_pc=%u(base=%u)\n",
-                   (unsigned)(pio_ade->irq & 0xFF),
-                   (unsigned)(pio_ade->sm[sm_burst_drive].addr),
-                   (unsigned)offset_burst_drive,
-                   (unsigned)(pio_ade->sm[sm_burst_gate].addr),
-                   (unsigned)offset_burst_gate);
-            pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
-            pio_sm_set_enabled(pio_ade, sm_burst_gate, false);
-            if (config.camera_enabled) {
-                pio_sm_set_enabled(pio_ade, sm_camera, false);
-                pio_sm_exec(pio_ade, sm_camera, pio_encode_set(pio_pins, 0));
-            }
-            if (config.strobe_enabled) {
-                pio_sm_set_enabled(pio_ade, sm_strobe, false);
-                pio_sm_exec(pio_ade, sm_strobe, pio_encode_set(pio_pins, 0));
-            }
-            return;
-        }
+        tight_loop_contents();
     }
     pio_interrupt_clear(pio_ade, 5);
     pio_sm_set_enabled(pio_ade, sm_burst_drive, false);
@@ -282,31 +388,54 @@ void burstfreq_set(const char *args) {
 void camtrig_set(const char *args) {
     config.camera_trigger  = (uint)atoi(args);
     printf("camtrig=%u us\n", config.camera_trigger);
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
 }
 
 void camexp_set(const char *args) {
     config.camera_exposure = (uint)atoi(args);
     printf("camexp=%u us\n", config.camera_exposure);
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
 }
 
 void strobtrig_set(const char *args) {
     config.strobe_trigger  = (uint)atoi(args);
     printf("strobtrig=%u us\n", config.strobe_trigger);
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
 }
 
 void strobwidth_set(const char *args) {
     config.strobe_width    = (uint)atoi(args);
     printf("strobwidth=%u us\n", config.strobe_width);
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
 }
 
 void camera_enable(const char *args) {
     config.camera_enabled = true;
     printf("ade: camera enabled\n");
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
 }
 
 void strobe_enable(const char *args) {
     config.strobe_enabled = true;
     printf("ade: strobe enabled\n");
+    if (current_mode == ADE_MODE_TRIGGER) ade_trigger_load_and_start();
+}
+
+void trigedge_set(const char *args) {
+    while (*args == ' ') args++;
+    if (strncmp(args, "rising", 6) == 0) {
+        config.trigger_falling = false;
+    } else if (strncmp(args, "falling", 7) == 0) {
+        config.trigger_falling = true;
+    } else {
+        printf("usage: set trigedge rising|falling\n");
+        return;
+    }
+    printf("trigedge=%s\n", config.trigger_falling ? "falling" : "rising");
+    if (current_mode == ADE_MODE_TRIGGER) {
+        ade_trigger_pin_apply();
+        ade_trigger_load_and_start();   /* re-arm so a stale half-edge is discarded */
+    }
 }
 
 void logging_enable(const char *args) {
