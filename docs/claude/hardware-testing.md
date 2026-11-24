@@ -81,6 +81,17 @@ REPL:
 
 ## Gotchas
 
+- **Two boards may be connected** (2026-11-23: RP2350 serial `0D26F3E8B47D1608`
+  = ADE board; another Pico `5044467290A7741C` on ttyACM0 with non-REPL firmware —
+  don't touch). Address boards via `/dev/serial/by-id/*<serial>*`, and before copying
+  a UF2, confirm the BOOTSEL drive belongs to the right board with
+  `readlink -f /sys/block/sdX` → USB port, then check `/sys/bus/usb/devices/<port>/serial`.
+  The mount point here is `/run/media/elias/RP2350` (mount it with `udisksctl mount -b /dev/sdX1`).
+- The bundled `build-*/_deps/picotool` has no USB support, so `picotool reboot` can't
+  rescue a hung board. A hung board needs a physical replug.
+- The version string is captured at **configure** time: after bumping
+  `version.yaml`, re-run `cmake --preset …` or the uf2 reports the old version.
+
 - The `-dirty` in the `build:` line just means the uf2 was built before
   committing; commit then rebuild for a clean hash.
 - After `reboot-dfu`, wait for the MSD auto-mount (a couple of seconds) before

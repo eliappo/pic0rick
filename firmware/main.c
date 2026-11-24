@@ -163,11 +163,13 @@ command_t command_list[] = {
     {"set camexp",      camexp_set},
     {"set strobtrig",   strobtrig_set},
     {"set strobwidth",  strobwidth_set},
+    {"set trigedge",    trigedge_set},
     {"enable logging",  logging_enable},
     {"enable camera",   camera_enable},
     {"enable strobe",   strobe_enable},
     {"arm eject",       ade_arm_ejection},
     {"arm calibration", ade_arm_calibration},
+    {"arm trigger",     ade_arm_trigger},
     {"fire",            ade_fire},
 #endif
 };

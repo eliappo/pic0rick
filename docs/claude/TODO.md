@@ -77,6 +77,7 @@ discoveries logged since.
 - [ ] **[claude]** Remove `firmware/burst.pio` (content migrated to `burst_drive.pio`)
 - [ ] **[maintainer]** Confirm burst frequency range and transducer resonant frequency for ADE
 - [ ] **[maintainer]** Confirm GPIO18/19/20/21 pin routing on ADE plug-in board (camera/strobe/motor)
+- [ ] **[maintainer]** Verify ADE trigger-in mode (`arm trigger`, GPIO20) on scope; decide rising vs falling edge default
 
 ## Discoveries (logged by Claude)
 

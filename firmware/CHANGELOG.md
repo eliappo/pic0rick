@@ -8,6 +8,16 @@ This file and `version.yaml` are the version record — editing them does not
 itself trigger a version bump. Every firmware version bump must add an entry
 here (see `docs/claude/README.md`).
 
+## 0.1.12 — 2026-11-17
+- **ADE external trigger-in mode (`-DADE=ON`):** new `arm trigger` mode where
+  camera (GPIO18) and strobe (GPIO21) pulses fire on every edge of GPIO20
+  (trigger input, 3.3 V max), using the existing `camtrig`/`camexp`/`strobtrig`/
+  `strobwidth` delays/widths measured from the edge. No transducer burst;
+  continuous until another mode is armed. New PIO program `delayed_pulse_gpio`
+  (11 instr) replaces `delayed_pulse` while in trigger mode. `set trigedge
+  rising|falling` selects the edge (input-pad invert). Settings apply live.
+  Burst/ejection mode (`arm eject` + `fire`) unchanged.
+
 ## 0.1.11 — 2026-09-13
 - **Fix MUX/pulser PIO1 state-machine conflict (no-echo on MUX builds):**
   `max14866_init` hardcoded PIO1 `sm0`, but the shared pulser
